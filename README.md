@@ -26,8 +26,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ViChaos-Secure.git
-cd ViChaos-Secure/vichaos
+git clone https://github.com/DX4GREY/vichaos.git
+cd vichaos
 
 # Build and install
 make
