@@ -1,6 +1,6 @@
 # ViChaos Secure Encryption
 
-*A secure file encryption/decryption system*
+*A secure encryption/decryption system*
 
 ## Table of Contents
 - [Features](#features)
