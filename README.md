@@ -1,6 +1,5 @@
 # ViChaos Secure Encryption
 
-![ViChaos Logo](https://via.placeholder.com/150x50?text=ViChaos)  
 *A secure file encryption/decryption system*
 
 ## Table of Contents
@@ -149,5 +148,3 @@ This README provides users with everything they need to:
 - Integrate the library
 - Verify proper operation
 - Understand security considerations
-
-Would you like me to add any specific additional sections or details?
