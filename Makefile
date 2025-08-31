@@ -29,12 +29,16 @@ static: $(OBJS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -I$(INC_DIR) -c $< -o $@
-
-install: all
-	install -d $(INCLUDE_PATH) $(LIB_PATH)
-	install $(INC_DIR)/vichaos.h $(INCLUDE_PATH)
-	install $(LIB_NAME) $(STATIC_LIB) $(LIB_PATH)
-	ldconfig
+	ifeq ($(OS),Windows_NT)
+	install:
+		@echo "Install not supported on Windows. Please copy files manually."
+	else
+	install: all
+		install -d $(INCLUDE_PATH) $(LIB_PATH)
+		install $(INC_DIR)/vichaos.h $(INCLUDE_PATH)
+		install $(LIB_NAME) $(STATIC_LIB) $(LIB_PATH)
+		ldconfig
+	endif
 
 uninstall:
 	rm -f $(INCLUDE_PATH)/vichaos.h
