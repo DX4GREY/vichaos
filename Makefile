@@ -1,50 +1,77 @@
 # Compiler and flags
-CC = gcc
-CFLAGS = -Wall -Wextra -O2 -fPIC
-LDFLAGS = -lcrypto
+CC      ?= gcc
+CFLAGS  ?= -Wall -Wextra -O2 -fPIC
+LDFLAGS ?= -lcrypto
+
+# Hardening for both debug and release builds
+HARDEN_FLAGS = -fstack-protector-strong -D_FORTIFY_SOURCE=2
 
 # Targets
-LIB_NAME = libvichaos.so
-STATIC_LIB = libvichaos.a
+LIB_NAME    = libvichaos.so
+STATIC_LIB  = libvichaos.a
+SONAME      = libvichaos.so.2
 
 # Installation paths
-PREFIX = /usr/local
+PREFIX      = /usr/local
 INCLUDE_PATH = $(PREFIX)/include
-LIB_PATH = $(PREFIX)/lib
+LIB_PATH     = $(PREFIX)/lib
 
 # Source files
 SRC_DIR = src
 INC_DIR = include
-SRCS = $(SRC_DIR)/vichaos.c
-OBJS = $(SRCS:.c=.o)
+SRCS    = $(SRC_DIR)/vichaos.c
+OBJS    = $(SRCS:.c=.o)
+
+# Allows local performance builds:  make OPTFLAGS="-O3 -march=native -flto"
+OPTFLAGS ?= -O2
 
 # Build targets
 all: shared static
 
 shared: $(OBJS)
-	$(CC) -shared -o $(LIB_NAME) $(OBJS) $(LDFLAGS)
+	$(CC) -shared -Wl,-soname,$(SONAME) -o $(LIB_NAME) $(OBJS) $(LDFLAGS)
 
 static: $(OBJS)
 	ar rcs $(STATIC_LIB) $(OBJS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) -I$(INC_DIR) -c $< -o $@
-	ifeq ($(OS),Windows_NT)
-	install:
-		@echo "Install not supported on Windows. Please copy files manually."
-	else
-	install: all
-		install -d $(INCLUDE_PATH) $(LIB_PATH)
-		install $(INC_DIR)/vichaos.h $(INCLUDE_PATH)
-		install $(LIB_NAME) $(STATIC_LIB) $(LIB_PATH)
-		ldconfig
-	endif
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(HARDEN_FLAGS) -I$(INC_DIR) -c $< -o $@
+
+# ----------------------------------------------------------------------------
+# Install / uninstall (conditional on OS)
+# ----------------------------------------------------------------------------
+
+ifeq ($(OS),Windows_NT)
+install:
+	@echo "Install is not supported on Windows. Please copy files manually:"
+	@echo "  $(INC_DIR)/vichaos.h -> your include path"
+	@echo "  $(LIB_NAME), $(STATIC_LIB) -> your lib path"
+else
+install: all
+	install -d $(DESTDIR)$(INCLUDE_PATH) $(DESTDIR)$(LIB_PATH)
+	install -m 0644 $(INC_DIR)/vichaos.h $(DESTDIR)$(INCLUDE_PATH)
+	install -m 0755 $(LIB_NAME) $(DESTDIR)$(LIB_PATH)
+	install -m 0644 $(STATIC_LIB) $(DESTDIR)$(LIB_PATH)
+	ln -sf $(LIB_NAME) $(DESTDIR)$(LIB_PATH)/$(SONAME)
+	@if command -v ldconfig >/dev/null 2>&1; then ldconfig; fi
+endif
 
 uninstall:
-	rm -f $(INCLUDE_PATH)/vichaos.h
-	rm -f $(LIB_PATH)/$(LIB_NAME) $(LIB_PATH)/$(STATIC_LIB)
+	rm -f $(DESTDIR)$(INCLUDE_PATH)/vichaos.h
+	rm -f $(DESTDIR)$(LIB_PATH)/$(LIB_NAME) $(DESTDIR)$(LIB_PATH)/$(SONAME)
+	rm -f $(DESTDIR)$(LIB_PATH)/$(STATIC_LIB)
+
+# Unit tests
+TEST_SRC = test/test_vichaos.c
+TEST_BIN = test/test_vichaos
+
+test: static $(TEST_BIN)
+	$(TEST_BIN)
+
+$(TEST_BIN): $(TEST_SRC) $(STATIC_LIB)
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(HARDEN_FLAGS) -I$(INC_DIR) -o $@ $(TEST_SRC) $(STATIC_LIB) $(LDFLAGS)
 
 clean:
-	rm -f $(OBJS) $(LIB_NAME) $(STATIC_LIB)
+	rm -f $(OBJS) $(LIB_NAME) $(SONAME) $(STATIC_LIB) $(TEST_BIN)
 
-.PHONY: all shared static install uninstall clean
+.PHONY: all shared static install uninstall clean test
