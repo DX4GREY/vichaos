@@ -155,9 +155,9 @@ vichaos_result_t vichaos_encrypt_with_options(
     int len = 0;
     int final_len = 0;
 
+    /* VICHAOS_IV_SIZE (12) is the GCM default IV length, so the
+     * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, VICHAOS_IV_SIZE,
-                            NULL) != 1 ||
         EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
         result = VICHAOS_CRYPTO_ERROR;
         goto cleanup_ctx;
@@ -285,9 +285,9 @@ vichaos_result_t vichaos_decrypt_with_options(
         return VICHAOS_CRYPTO_ERROR;
     }
 
+    /* VICHAOS_IV_SIZE (12) is the GCM default IV length, so the
+     * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, VICHAOS_IV_SIZE,
-                            NULL) != 1 ||
         EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
         result = VICHAOS_CRYPTO_ERROR;
         goto cleanup;
@@ -413,9 +413,9 @@ vichaos_stream_t *vichaos_stream_encrypt_init(
     }
 
     int len = 0;
+    /* VICHAOS_IV_SIZE (12) is the GCM default IV length, so the
+     * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, VICHAOS_IV_SIZE,
-                            NULL) != 1 ||
         EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1 ||
         /* authenticate the header as AAD */
         EVP_EncryptUpdate(ctx, NULL, &len, header_out,
@@ -526,9 +526,9 @@ vichaos_stream_t *vichaos_stream_decrypt_init(
     }
 
     int len = 0;
+    /* VICHAOS_IV_SIZE (12) is the GCM default IV length, so the
+     * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, VICHAOS_IV_SIZE,
-                            NULL) != 1 ||
         EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1 ||
         EVP_DecryptUpdate(ctx, NULL, &len, header,
                           VICHAOS_HEADER_OVERHEAD) != 1) {

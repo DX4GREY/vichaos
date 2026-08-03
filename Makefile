@@ -6,6 +6,14 @@ LDFLAGS ?= -lcrypto
 # Hardening for both debug and release builds
 HARDEN_FLAGS = -fstack-protector-strong -D_FORTIFY_SOURCE=2
 
+# Performance build flags (default for release).
+# -O3        : aggressive optimization
+# -march=native : tune for the build machine's CPU (AES-NI, AVX2, etc.)
+# -flto      : link-time optimization across translation units
+# -fomit-frame-pointer : reduce call overhead
+# -funroll-loops : unroll hot loops (helps PBKDF2 inner loop)
+OPTFLAGS ?= -O3 -march=native -flto -fomit-frame-pointer -funroll-loops
+
 # Targets
 LIB_NAME    = libvichaos.so
 STATIC_LIB  = libvichaos.a
@@ -21,9 +29,6 @@ SRC_DIR = src
 INC_DIR = include
 SRCS    = $(SRC_DIR)/vichaos.c
 OBJS    = $(SRCS:.c=.o)
-
-# Allows local performance builds:  make OPTFLAGS="-O3 -march=native -flto"
-OPTFLAGS ?= -O2
 
 # Build targets
 all: shared static

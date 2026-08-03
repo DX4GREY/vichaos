@@ -2,7 +2,9 @@
 
 CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
-OPTFLAGS ?= -O3 -march=native
+# Match the release flags from the top-level Makefile so the benchmark
+# measures the same optimized build users get.
+OPTFLAGS ?= -O3 -march=native -flto -fomit-frame-pointer -funroll-loops
 LDFLAGS  ?= -lcrypto
 
 INC_DIR = ../include
