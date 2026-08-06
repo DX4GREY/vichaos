@@ -231,6 +231,18 @@ vichaos_result_t vichaos_stream_decrypt_final(
 const char *vichaos_error_string(vichaos_result_t result);
 void vichaos_free(void *ptr);
 
+/* ---------------------------------------------------------------------------
+ * Internal helpers (shared across modules)
+ * --------------------------------------------------------------------------- */
+
+int validate_options(const vichaos_options_t *options,
+                     vichaos_result_t *err);
+
+vichaos_result_t derive_key(const char *password,
+                            const uint8_t *salt,
+                            uint32_t kdf_iter,
+                            uint8_t key[VICHAOS_KEY_SIZE]);
+
 #ifdef __cplusplus
 }
 #endif

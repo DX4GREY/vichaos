@@ -27,7 +27,10 @@ LIB_PATH     = $(PREFIX)/lib
 # Source files
 SRC_DIR = src
 INC_DIR = include
-SRCS    = $(SRC_DIR)/vichaos.c
+SRCS    = $(SRC_DIR)/vichaos_core.c \
+          $(SRC_DIR)/vichaos_encrypt.c \
+          $(SRC_DIR)/vichaos_decrypt.c \
+          $(SRC_DIR)/vichaos_stream.c
 OBJS    = $(SRCS:.c=.o)
 
 # Build targets
