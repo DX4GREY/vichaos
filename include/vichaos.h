@@ -1,67 +1,23 @@
-// --------------------------------- ABOUT -------------------------------------
-// Original Author: Dx4 (DX4GREY)
-// Repository: [https://github.com/DX4GREY](https://github.com/DX4GREY)
-// License: MIT (see end of file)
+// -----------------------------------------------------------------------------
+// ViChaos v3 — Lightweight file/data encryption library for C
+// Built on OpenSSL EVP API: PBKDF2-HMAC-SHA256 + AES-256-GCM (AEAD).
 //
-// ViChaos v2 — Lightweight file/data encryption helpers for C
-// A simple, self-contained encrypt/decrypt helper built on top of OpenSSL
-// primitives (PBKDF2-HMAC-SHA256, AES-256-GCM, RAND_bytes).
+// Copyright (c) 2026 DX4GREY
+// License: MIT
+// -----------------------------------------------------------------------------
 //
-// Major changes in v2 (from v1):
-//   - Replaced the hand-rolled additive/XOR/permutation layer with the
-//     authenticated cipher AES-256-GCM (AEAD) via the OpenSSL EVP API.
-//     This provides industry-standard confidentiality + integrity and is
-//     hardware-accelerated (AES-NI) — dramatically faster than v1.
-//   - Format version byte embedded in the payload for future migration.
-//   - Configurable KDF iteration count via vichaos_options_t
-//     (default 600,000 — OWASP recommendation for PBKDF2-SHA256).
-//   - All secrets (derived key, IV, etc.) are securely wiped with
-//     OPENSSL_cleanse() before buffers are freed.
-//   - Proper vichaos_result_t error codes everywhere (no bare -1).
-//   - Reduced allocations: single output allocation per call.
-//   - NEW: streaming API (vichaos_stream_*) for encrypting/decrypting
-//     arbitrarily large files with constant memory (chunked I/O).
+// #include <vichaos.h>
 //
-// Data layout produced by vichaos_encrypt:
-//   [MAGIC "ViChaos2" (8)] [VERSION (1) = 2] [SALT (16)] [IV (12)]
-//   [CIPHERTEXT (plaintext_len)] [AUTH TAG (16)]
+// ## Data Layout
 //
-// API usage — single-shot:
-//   uint8_t *enc = NULL; size_t enc_len = 0;
-//   vichaos_result_t r = vichaos_encrypt(plaintext, plaintext_len,
-//                                        password, &enc, &enc_len);
-//   if (r == VICHAOS_OK) { ... vichaos_free(enc); }
+//   [MAGIC "ViChaos" (7)] [VERSION (1) = 0x03] [SALT (16)] [IV (12)]
+//   [CIPHERTEXT (n)] [AUTH TAG (16)]
 //
-// API usage — streaming (constant memory, for large files):
-//   uint8_t header[VICHAOS_HEADER_OVERHEAD]; size_t header_len = 0;
-//   vichaos_stream_t *s = vichaos_stream_encrypt_init(password, NULL,
-//                              header, &header_len);            // write header first
-//   while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-//       vichaos_stream_encrypt_update(s, buf, n, out, &out_len);  // write out
-//   }
-//   vichaos_stream_encrypt_final(s, tag, &tag_len);               // write trailing tag
+// ## Thread Safety
 //
-// Return values:
-//   - VICHAOS_OK
-//   - VICHAOS_INVALID_ARGUMENT
-//   - VICHAOS_INVALID_HEADER
-//   - VICHAOS_UNSUPPORTED_VERSION
-//   - VICHAOS_HMAC_MISMATCH      (auth tag verification failed)
-//   - VICHAOS_MEMORY_ERROR
-//   - VICHAOS_CRYPTO_ERROR
-//
-// Security notes / caveats:
-//   - Requires OpenSSL 1.1.1+ (AES-256-GCM support). Build against a
-//     maintained OpenSSL version and keep it patched.
-//   - PBKDF2 provides password stretching. Increase kdf_iter on fast
-//     hardware; decrease on constrained devices, but NEVER below 100,000.
-//   - Streaming DECRYPT releases plaintext chunks BEFORE the final auth tag
-//     is verified. Callers MUST discard/rollback any output if
-//     vichaos_stream_decrypt_final() returns anything other than VICHAOS_OK.
-//   - Always securely erase plaintext/secrets in your own code too.
-//   - This library does not implement side-channel hardened primitives
-//     beyond what OpenSSL provides; treat as best-effort. For HSMs/smartcards
-//     use dedicated tooling.
+// All public functions are reentrant. No global mutable state.
+// Call vichaos_global_init() once at program startup before any other
+// ViChaos calls, and vichaos_global_cleanup() at exit.
 // -----------------------------------------------------------------------------
 
 #ifndef VICHAOS_H
@@ -75,173 +31,502 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------------------------
-// Constants
+// Version & constants
 // ---------------------------------------------------------------------------
 
-#define VICHAOS_FORMAT_MAGIC     "ViChaos2"
-#define VICHAOS_FORMAT_MAGIC_LEN 8
+#define VICHAOS_VERSION_MAJOR 3
+#define VICHAOS_VERSION_MINOR 0
+#define VICHAOS_VERSION_PATCH 0
+#define VICHAOS_VERSION_STRING "3.0.0"
 
-#define VICHAOS_VERSION          2
+#define VICHAOS_FORMAT_MAGIC     "ViChaos"
+#define VICHAOS_FORMAT_MAGIC_LEN 7
+#define VICHAOS_PAYLOAD_VERSION  0x03
 
-#define VICHAOS_SALT_SIZE        16
-#define VICHAOS_IV_SIZE          12   /* GCM standard nonce size */
-#define VICHAOS_TAG_SIZE         16   /* GCM auth tag size */
-#define VICHAOS_KEY_SIZE         32   /* AES-256 */
+#define VICHAOS_KEY_SIZE  32   /**< AES-256 key size in bytes */
+#define VICHAOS_SALT_SIZE 16   /**< PBKDF2 salt size in bytes */
+#define VICHAOS_IV_SIZE   12   /**< GCM recommended IV size in bytes */
+#define VICHAOS_TAG_SIZE  16   /**< GCM authentication tag size in bytes */
 
-/* OWASP-recommended minimum for PBKDF2-HMAC-SHA256 (2023+). */
-#define VICHAOS_DEFAULT_KDF_ITER 600000u
-#define VICHAOS_MIN_KDF_ITER     100000u
-#define VICHAOS_MAX_KDF_ITER     10000000u
+#define VICHAOS_HEADER_OVERHEAD (VICHAOS_FORMAT_MAGIC_LEN + 1 + VICHAOS_SALT_SIZE + VICHAOS_IV_SIZE)
+#define VICHAOS_OVERHEAD        (VICHAOS_HEADER_OVERHEAD + VICHAOS_TAG_SIZE)
 
-/* Total fixed header overhead: magic(8) + version(1) + salt(16) + iv(12). */
-#define VICHAOS_HEADER_OVERHEAD  (VICHAOS_FORMAT_MAGIC_LEN + 1 + \
-                                  VICHAOS_SALT_SIZE + VICHAOS_IV_SIZE)
+#define VICHAOS_MIN_KDF_ITER 100000U
+#define VICHAOS_MAX_KDF_ITER 10000000U
+#define VICHAOS_DEFAULT_KDF_ITER 600000U
 
-/* Output length = input length + HEADER_OVERHEAD + TAG_SIZE. */
-#define VICHAOS_OVERHEAD         (VICHAOS_HEADER_OVERHEAD + VICHAOS_TAG_SIZE)
-
-/* Recommended streaming chunk size (1 MiB). */
-#define VICHAOS_STREAM_CHUNK      (1024u * 1024u)
+#define VICHAOS_STREAM_CHUNK (1024 * 1024)  /**< 1 MiB default streaming chunk */
 
 // ---------------------------------------------------------------------------
-// Error codes
+// Result / error codes
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Detailed error codes returned by all ViChaos public functions.
+ */
 typedef enum {
-    VICHAOS_OK = 0,
-    VICHAOS_INVALID_ARGUMENT,      /* NULL pointer, invalid size, bad options */
-    VICHAOS_INVALID_HEADER,        /* magic/prefix mismatch */
-    VICHAOS_UNSUPPORTED_VERSION,   /* payload version not supported */
-    VICHAOS_HMAC_MISMATCH,         /* GCM auth tag verification failed */
-    VICHAOS_MEMORY_ERROR,          /* allocation failure */
-    VICHAOS_CRYPTO_ERROR           /* OpenSSL operation failed */
+    VICHAOS_SUCCESS = 0,
+    VICHAOS_ERR_NULL_PTR,           /**< NULL pointer passed to non-nullable param */
+    VICHAOS_ERR_INVALID_KEY,        /**< Key is NULL or wrong length */
+    VICHAOS_ERR_INVALID_IV,         /**< IV is NULL or wrong length */
+    VICHAOS_ERR_INVALID_TAG,        /**< Auth tag is NULL or wrong length */
+    VICHAOS_ERR_CIPHER_INIT,        /**< EVP_CIPHER_CTX initialization failed */
+    VICHAOS_ERR_ENCRYPT_FAIL,       /**< Encryption operation failed */
+    VICHAOS_ERR_DECRYPT_FAIL,       /**< Decryption operation failed */
+    VICHAOS_ERR_AUTH_FAIL,          /**< Authentication tag verification failed */
+    VICHAOS_ERR_MEMORY_ALLOC,       /**< Memory allocation failed */
+    VICHAOS_ERR_IO_READ,            /**< File/stream read error */
+    VICHAOS_ERR_IO_WRITE,           /**< File/stream write error */
+    VICHAOS_ERR_KDF_FAIL,           /**< PBKDF2 key derivation failed */
+    VICHAOS_ERR_VERSION_MISMATCH,   /**< Payload version unsupported */
+    VICHAOS_ERR_BUFFER_TOO_SMALL,   /**< Output buffer capacity insufficient */
+    VICHAOS_ERR_INVALID_PARAM,      /**< Invalid parameter value */
+    VICHAOS_ERR_OPENSSL,            /**< OpenSSL reported an error */
+    VICHAOS_ERR_UNKNOWN             /**< Unknown / fallback error */
 } vichaos_result_t;
+
+// ---------------------------------------------------------------------------
+// Type aliases for clarity & const-correctness
+// ---------------------------------------------------------------------------
+
+/** @brief 32-byte AES-256 key */
+typedef uint8_t vichaos_key_t[VICHAOS_KEY_SIZE];
+/** @brief 16-byte salt */
+typedef uint8_t vichaos_salt_t[VICHAOS_SALT_SIZE];
+/** @brief 12-byte IV/nonce */
+typedef uint8_t vichaos_iv_t[VICHAOS_IV_SIZE];
+/** @brief 16-byte GCM authentication tag */
+typedef uint8_t vichaos_tag_t[VICHAOS_TAG_SIZE];
 
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Configuration options for encryption/decryption operations.
+ */
 typedef struct {
-    uint32_t kdf_iter;   /* PBKDF2-HMAC-SHA256 iteration count */
+    uint32_t kdf_iter;      /**< PBKDF2 iteration count */
+    uint32_t chunk_size;    /**< Streaming chunk size in bytes (0 = default) */
+    int      disable_aesni; /**< Non-zero to force software AES (disable AES-NI) */
 } vichaos_options_t;
 
-/* Initialize options with secure defaults (kdf_iter = 600000). */
+/**
+ * @brief Initialize options structure with safe defaults.
+ * @param options Pointer to options to initialize.
+ */
 void vichaos_options_init(vichaos_options_t *options);
 
 // ---------------------------------------------------------------------------
-// Single-shot core functions
+// Secure buffer
 // ---------------------------------------------------------------------------
 
-/* NOTE: for decrypt, `options` is used only for KDF iteration; the iteration
- * count used at encryption time is NOT embedded in the payload. Callers that
- * used non-default kdf_iter MUST pass the same value here. */
-
-vichaos_result_t vichaos_encrypt_with_options(
-    const uint8_t *data,
-    size_t data_len,
-    const char *password,
-    const vichaos_options_t *options,
-    uint8_t **output,
-    size_t *output_len);
-
-vichaos_result_t vichaos_decrypt_with_options(
-    const uint8_t *data,
-    size_t data_len,
-    const char *password,
-    const vichaos_options_t *options,
-    uint8_t **output,
-    size_t *output_len);
-
-/* Convenience wrappers using default options. */
-vichaos_result_t vichaos_encrypt(
-    const uint8_t *data,
-    size_t data_len,
-    const char *password,
-    uint8_t **output,
-    size_t *output_len);
-
-vichaos_result_t vichaos_decrypt(
-    const uint8_t *data,
-    size_t data_len,
-    const char *password,
-    uint8_t **output,
-    size_t *output_len);
+/**
+ * @brief Bounds-checked secure buffer with canary overflow detection.
+ */
+typedef struct {
+    uint8_t *data;
+    size_t   len;
+    size_t   capacity;
+    uint32_t canary;  /**< Simple overflow guard: set to 0xDEADBEEF */
+} vichaos_buffer_t;
 
 // ---------------------------------------------------------------------------
-// Streaming API (constant memory, for large files)
+// Cipher context (reusable for multiple operations)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Opaque reusable cipher context for high-throughput scenarios.
+ */
+typedef struct vichaos_cipher_ctx_t vichaos_cipher_ctx_t;
+
+// ---------------------------------------------------------------------------
+// Stream state (opaque)
 // ---------------------------------------------------------------------------
 
 typedef struct vichaos_stream_t vichaos_stream_t;
 
-/* Begin encryption. Outputs the fixed 37-byte header (magic+version+salt+iv)
- * which the caller must persist BEFORE any update output.
- * Returns NULL on failure. */
-vichaos_stream_t *vichaos_stream_encrypt_init(
-    const char *password,
-    const vichaos_options_t *options,
-    uint8_t *header_out,
-    size_t *header_out_len);
-
-/* Encrypt a chunk. out must have capacity >= in_len + 16 (EVP block margin).
- * Sets *out_len to the number of bytes written (usually == in_len for GCM). */
-vichaos_result_t vichaos_stream_encrypt_update(
-    vichaos_stream_t *stream,
-    const uint8_t *in,
-    size_t in_len,
-    uint8_t *out,
-    size_t *out_len);
-
-/* Finalize encryption, outputting the 16-byte auth tag. Caller must persist
- * the tag immediately AFTER all update output. Also frees the stream. */
-vichaos_result_t vichaos_stream_encrypt_final(
-    vichaos_stream_t *stream,
-    uint8_t *tag_out,
-    size_t *tag_out_len);
-
-/* Begin decryption. header must be exactly the leading VICHAOS_HEADER_OVERHEAD
- * bytes of the payload. Returns NULL on invalid header/version/options. */
-vichaos_stream_t *vichaos_stream_decrypt_init(
-    const char *password,
-    const uint8_t *header,
-    size_t header_len,
-    const vichaos_options_t *options);
-
-/* Decrypt a chunk. out must have capacity >= in_len + 16 (EVP block margin).
- * Sets *out_len to the number of plaintext bytes written. */
-vichaos_result_t vichaos_stream_decrypt_update(
-    vichaos_stream_t *stream,
-    const uint8_t *in,
-    size_t in_len,
-    uint8_t *out,
-    size_t *out_len);
-
-/* Finalize decryption. `tag` is the trailing 16-byte auth tag read from the
- * end of the payload. Verifies authenticity; frees the stream.
- * IMPORTANT: callers must discard/rollback any plaintext already written if
- * this returns anything other than VICHAOS_OK. */
-vichaos_result_t vichaos_stream_decrypt_final(
-    vichaos_stream_t *stream,
-    const uint8_t *tag,
-    size_t tag_len);
-
 // ---------------------------------------------------------------------------
-// Helper functions
+// Log levels
 // ---------------------------------------------------------------------------
 
-const char *vichaos_error_string(vichaos_result_t result);
+/**
+ * @brief Logging severity levels.
+ */
+typedef enum {
+    VICHAOS_LOG_ERROR = 0,
+    VICHAOS_LOG_WARN  = 1,
+    VICHAOS_LOG_INFO  = 2,
+    VICHAOS_LOG_DEBUG = 3
+} vichaos_log_level_t;
+
+// ---------------------------------------------------------------------------
+// Global initialization / cleanup (thread-safe, call once)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Initialize the ViChaos library. Call once at program startup.
+ * @return VICHAOS_SUCCESS on success, error code on failure.
+ */
+vichaos_result_t vichaos_global_init(void);
+
+/**
+ * @brief Cleanup the ViChaos library. Call once at program exit.
+ */
+void vichaos_global_cleanup(void);
+
+// ---------------------------------------------------------------------------
+// Error handling
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Convert a result code to a human-readable string.
+ * @param result The vichaos_result_t to describe.
+ * @return Constant string describing the error. Never returns NULL.
+ */
+const char *vichaos_strerror(vichaos_result_t result);
+
+/**
+ * @brief Set the minimum log level. Messages below this level are suppressed.
+ * @param level Minimum severity to log.
+ */
+void vichaos_log_set_level(vichaos_log_level_t level);
+
+void vichaos_log_internal(vichaos_log_level_t level,
+                          const char *file,
+                          int line,
+                          const char *fmt,
+                          ...);
+
+/**
+ * @brief Logging macro with file/line info.
+ */
+#define VICHAOS_LOG(level, fmt, ...) \
+    vichaos_log_internal((level), __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+
+// ---------------------------------------------------------------------------
+// Memory management
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Secure memory allocation (page-locked where possible).
+ * @param size Number of bytes to allocate.
+ * @return Pointer to allocated memory, or NULL on failure.
+ */
+void *vichaos_secure_alloc(size_t size);
+
+/**
+ * @brief Secure memory free with automatic zeroization.
+ * @param ptr Pointer to memory to free.
+ * @param size Size of the memory region in bytes (for zeroization).
+ */
+void vichaos_secure_free(void *ptr, size_t size);
+
+/**
+ * @brief Constant-time memory zeroization with compiler barrier.
+ * @param ptr Pointer to memory to clear.
+ * @param len Number of bytes to zero.
+ */
+void vichaos_secure_zeroize(void *ptr, size_t len);
+
+/**
+ * @brief Constant-time memory comparison (prevents timing attacks).
+ * @param a First buffer.
+ * @param b Second buffer.
+ * @param len Number of bytes to compare.
+ * @return 0 if equal, non-zero otherwise.
+ */
+int vichaos_secure_memcmp(const void *a, const void *b, size_t len);
+
+/**
+ * @brief Standard free wrapper (for backward compatibility).
+ */
 void vichaos_free(void *ptr);
 
-/* ---------------------------------------------------------------------------
- * Internal helpers (shared across modules)
- * --------------------------------------------------------------------------- */
+// ---------------------------------------------------------------------------
+// Secure buffer helpers
+// ---------------------------------------------------------------------------
 
-int validate_options(const vichaos_options_t *options,
-                     vichaos_result_t *err);
+/**
+ * @brief Initialize a secure buffer.
+ * @param buf Pointer to vichaos_buffer_t to initialize.
+ * @param capacity Initial capacity in bytes.
+ * @return VICHAOS_SUCCESS or VICHAOS_ERR_MEMORY_ALLOC.
+ */
+vichaos_result_t vichaos_buffer_init(vichaos_buffer_t *buf, size_t capacity);
 
-vichaos_result_t derive_key(const char *password,
-                            const uint8_t *salt,
-                            uint32_t kdf_iter,
-                            uint8_t key[VICHAOS_KEY_SIZE]);
+/**
+ * @brief Append data to a secure buffer.
+ * @param buf Buffer to append into.
+ * @param data Data to append.
+ * @param len Length of data in bytes.
+ * @return VICHAOS_SUCCESS or VICHAOS_ERR_BUFFER_TOO_SMALL / VICHAOS_ERR_MEMORY_ALLOC.
+ */
+vichaos_result_t vichaos_buffer_append(vichaos_buffer_t *buf,
+                                       const uint8_t *data,
+                                       size_t len);
+
+/**
+ * @brief Zeroize and free a secure buffer.
+ */
+void vichaos_buffer_cleanup(vichaos_buffer_t *buf);
+
+// ---------------------------------------------------------------------------
+// Hardware detection
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Check if AES-NI hardware acceleration is available at runtime.
+ * @return Non-zero if AES-NI is supported, 0 otherwise.
+ */
+int vichaos_hardware_aes_supported(void);
+
+// ---------------------------------------------------------------------------
+// Payload format helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Packed payload header: [MAGIC(7)] [VERSION(1)] [SALT(16)] [IV(12)]
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  magic[VICHAOS_FORMAT_MAGIC_LEN];
+    uint8_t  version;
+    uint8_t  salt[VICHAOS_SALT_SIZE];
+    uint8_t  iv[VICHAOS_IV_SIZE];
+} vichaos_payload_header_t;
+
+/**
+ * @brief Parse a ViChaos payload into its constituent parts.
+ */
+vichaos_result_t vichaos_payload_parse(const uint8_t *data,
+                                       size_t data_len,
+                                       vichaos_payload_header_t *header,
+                                       const uint8_t **ciphertext,
+                                       size_t *ciphertext_len,
+                                       const uint8_t **tag,
+                                       size_t *tag_len);
+
+/**
+ * @brief Validate a payload header (magic + version).
+ */
+vichaos_result_t vichaos_payload_validate(const vichaos_payload_header_t *header);
+
+// ---------------------------------------------------------------------------
+// Key derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Derive a 256-bit key from a password using PBKDF2-HMAC-SHA256.
+ */
+vichaos_result_t vichaos_kdf_derive(const char *password,
+                                    size_t password_len,
+                                    const uint8_t salt[VICHAOS_SALT_SIZE],
+                                    uint32_t kdf_iter,
+                                    uint8_t key[VICHAOS_KEY_SIZE]);
+
+// ---------------------------------------------------------------------------
+// Cipher operations (low-level)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Encrypt plaintext with AES-256-GCM.
+ */
+vichaos_result_t vichaos_cipher_encrypt(const uint8_t key[VICHAOS_KEY_SIZE],
+                                        const uint8_t iv[VICHAOS_IV_SIZE],
+                                        const uint8_t *plaintext,
+                                        size_t plaintext_len,
+                                        const uint8_t *aad,
+                                        size_t aad_len,
+                                        uint8_t *ciphertext,
+                                        uint8_t tag[VICHAOS_TAG_SIZE]);
+
+/**
+ * @brief Decrypt ciphertext with AES-256-GCM and verify auth tag.
+ */
+vichaos_result_t vichaos_cipher_decrypt(const uint8_t key[VICHAOS_KEY_SIZE],
+                                        const uint8_t iv[VICHAOS_IV_SIZE],
+                                        const uint8_t *ciphertext,
+                                        size_t ciphertext_len,
+                                        const uint8_t *aad,
+                                        size_t aad_len,
+                                        const uint8_t tag[VICHAOS_TAG_SIZE],
+                                        uint8_t *plaintext);
+
+// ---------------------------------------------------------------------------
+// Reusable cipher context
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Initialize a reusable cipher context for encryption.
+ */
+vichaos_result_t vichaos_ctx_init(vichaos_cipher_ctx_t *ctx,
+                                  const uint8_t key[VICHAOS_KEY_SIZE]);
+
+/**
+ * @brief Encrypt data using a reusable context.
+ */
+vichaos_result_t vichaos_ctx_encrypt(vichaos_cipher_ctx_t *ctx,
+                                     const uint8_t *plaintext,
+                                     size_t plaintext_len,
+                                     uint8_t *ciphertext,
+                                     uint8_t tag[VICHAOS_TAG_SIZE]);
+
+/**
+ * @brief Decrypt data using a reusable context.
+ */
+vichaos_result_t vichaos_ctx_decrypt(vichaos_cipher_ctx_t *ctx,
+                                     const uint8_t *ciphertext,
+                                     size_t ciphertext_len,
+                                     const uint8_t tag[VICHAOS_TAG_SIZE],
+                                     uint8_t *plaintext);
+
+/**
+ * @brief Cleanup and free a cipher context.
+ */
+void vichaos_ctx_cleanup(vichaos_cipher_ctx_t *ctx);
+
+// ---------------------------------------------------------------------------
+// Single-shot encrypt / decrypt
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Encrypt data with password, returning a complete payload.
+ *
+ * Output format: [MAGIC(7)] [VERSION(1)] [SALT(16)] [IV(12)]
+ *                 [CIPHERTEXT(n)] [TAG(16)]
+ *
+ * @param plaintext     Input data to encrypt.
+ * @param plaintext_len Length of plaintext in bytes.
+ * @param password      Password (UTF-8 / bytes).
+ * @param password_len  Length of password in bytes (0 = NUL-terminated).
+ * @param options       Configuration options (NULL for defaults).
+ * @param output        Output buffer allocated by the library; caller frees with
+ *                      vichaos_free() or vichaos_secure_free().
+ * @param output_len    Output: total payload length in bytes.
+ * @return VICHAOS_SUCCESS or appropriate error code.
+ *
+ * @note output must be freed with vichaos_free().
+ */
+vichaos_result_t vichaos_encrypt(const uint8_t *plaintext,
+                                 size_t plaintext_len,
+                                 const char *password,
+                                 size_t password_len,
+                                 const vichaos_options_t *options,
+                                 uint8_t **output,
+                                 size_t *output_len);
+
+/**
+ * @brief Decrypt a ViChaos payload using a password.
+ */
+vichaos_result_t vichaos_decrypt(const uint8_t *data,
+                                 size_t data_len,
+                                 const char *password,
+                                 size_t password_len,
+                                 const vichaos_options_t *options,
+                                 uint8_t **output,
+                                 size_t *output_len);
+
+// ---------------------------------------------------------------------------
+// Streaming encrypt / decrypt (constant memory)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Initialize streaming encryption.
+ *
+ * Caller must write the returned header to the output stream before any
+ * update calls.
+ */
+vichaos_stream_t *vichaos_stream_encrypt_init(const char *password,
+                                              size_t password_len,
+                                              const vichaos_options_t *options,
+                                              uint8_t *header_out,
+                                              size_t *header_out_len);
+
+/**
+ * @brief Encrypt a chunk of data.
+ */
+vichaos_result_t vichaos_stream_encrypt_update(vichaos_stream_t *stream,
+                                               const uint8_t *in,
+                                               size_t in_len,
+                                               uint8_t *out,
+                                               size_t *out_len);
+
+/**
+ * @brief Finalize streaming encryption and output the auth tag.
+ *
+ * This also frees the stream handle.
+ */
+vichaos_result_t vichaos_stream_encrypt_final(vichaos_stream_t *stream,
+                                              uint8_t *tag_out,
+                                              size_t *tag_out_len);
+
+/**
+ * @brief Initialize streaming decryption.
+ */
+vichaos_stream_t *vichaos_stream_decrypt_init(const char *password,
+                                              size_t password_len,
+                                              const uint8_t *header,
+                                              size_t header_len,
+                                              const vichaos_options_t *options);
+
+/**
+ * @brief Decrypt a chunk of ciphertext.
+ */
+vichaos_result_t vichaos_stream_decrypt_update(vichaos_stream_t *stream,
+                                               const uint8_t *in,
+                                               size_t in_len,
+                                               uint8_t *out,
+                                               size_t *out_len);
+
+/**
+ * @brief Finalize streaming decryption and verify the auth tag.
+ *
+ * IMPORTANT: Callers MUST discard/rollback any plaintext already produced
+ * if this returns anything other than VICHAOS_SUCCESS.
+ */
+vichaos_result_t vichaos_stream_decrypt_final(vichaos_stream_t *stream,
+                                              const uint8_t *tag,
+                                              size_t tag_len);
+
+// ---------------------------------------------------------------------------
+// Backward-compatible convenience wrappers (NUL-terminated password)
+// ---------------------------------------------------------------------------
+
+vichaos_result_t vichaos_encrypt_string_password(const uint8_t *plaintext,
+                                                 size_t plaintext_len,
+                                                 const char *password,
+                                                 const vichaos_options_t *options,
+                                                 uint8_t **output,
+                                                 size_t *output_len);
+
+vichaos_result_t vichaos_decrypt_string_password(const uint8_t *data,
+                                                 size_t data_len,
+                                                 const char *password,
+                                                 const vichaos_options_t *options,
+                                                 uint8_t **output,
+                                                 size_t *output_len);
+
+// ---------------------------------------------------------------------------
+// OpenSSL integration helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Map an OpenSSL return code to vichaos_result_t.
+ * @param openssl_ret OpenSSL function return value (1 = success, <=0 = failure).
+ * @return VICHAOS_SUCCESS if openssl_ret == 1, VICHAOS_ERR_OPENSSL otherwise.
+ */
+vichaos_result_t vichaos_openssl_check(int openssl_ret);
+
+void vichaos_openssl_init(void);
+void vichaos_openssl_cleanup(void);
+
+// ---------------------------------------------------------------------------
+// Security helpers
+// ---------------------------------------------------------------------------
+
+int vichaos_disable_core_dump(void);
+int vichaos_mlock(const void *addr, size_t len);
+int vichaos_munlock(const void *addr, size_t len);
 
 #ifdef __cplusplus
 }

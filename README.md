@@ -1,4 +1,4 @@
-# ViChaos v2 — Secure Encryption Library
+# ViChaos v3 — Secure Encryption Library
 
 *A lightweight, self-contained file/data encryption library for C, built on OpenSSL.*
 
@@ -15,104 +15,80 @@
 ## Features
 
 - **Authenticated encryption (AEAD)** using **AES-256-GCM** via the OpenSSL EVP API
-  - Industry-standard confidentiality **and** integrity (16-byte auth tag)
-  - Hardware acceleration (AES-NI) where available
-- **Password-based key derivation** — PBKDF2-HMAC-SHA256
-  - Configurable iteration count (default 600,000, OWASP-recommended)
-- **Format versioning** — version byte embedded in payload for future migration
-- **Secure memory handling** — all secrets wiped with `OPENSSL_cleanse()`
-- **Proper error codes** — typed `vichaos_result_t` everywhere
-- **Two APIs**:
-  - **Single-shot** — encrypt/decrypt a buffer in one call
-  - **Streaming** — chunked encrypt/decrypt of arbitrarily large files with **constant memory**
-- **Cross-platform** C implementation (OpenSSL 1.1.1+)
-- **Simple CLI tools** for file operations
-- **Unit test suite** + CLI integration tests
+- **Password-based key derivation** — PBKDF2-HMAC-SHA256 (OWASP 2023 default: 600k iterations)
+- **Modular code structure** — core, stream, CLI, and utils separated
+- **Thread-safe & reentrant** — no global mutable state
+- **Secure memory management** — `vichaos_secure_alloc`, `vichaos_secure_zeroize`, constant-time `memcmp`
+- **Structured error handling** — typed `vichaos_result_t` with human-readable strings
+- **Two APIs**: single-shot and streaming (constant memory for large files)
+- **CMake build system** — shared/static libs, tests, sanitizers, coverage, pkg-config
+- **Doxygen documentation** throughout
+- **Comprehensive test suite** — unit, integration, and fuzz targets
+- **Security hardening** — stack protection, FORTIFY_SOURCE, PIE, AES-NI detection
 
 ## Installation
 
 ### Linux/Unix
 
 ```bash
-git clone https://github.com/DX4GREY/vichaos.git
-cd vichaos
+# Configure
+cmake -B build -DVICHAOS_BUILD_TESTS=ON
 
-# Build shared + static libraries
-make
+# Build
+cmake --build build
 
-# Run the unit test suite (91 checks)
-make test
+# Run tests
+ctest --test-dir build --output-on-failure
 
-# Install to /usr/local (or set PREFIX=/your/path)
-sudo make install
+# Install
+sudo cmake --install build
 ```
 
 ### Build Dependencies
 - OpenSSL development libraries (1.1.1 or newer)
+- CMake 3.15+
 - GCC or Clang
 
 Install dependencies on Debian/Ubuntu:
 ```bash
-sudo apt-get install build-essential libssl-dev
+sudo apt-get install build-essential libssl-dev cmake
 ```
 
 ## Usage
 
-### Command Line Tools (streaming, constant memory)
+### Command Line Tools
 
-**Encrypt a file:**
 ```bash
-encrypt_file input.txt output.enc "yourpassword"
-```
+# Encrypt
+vichaos_encrypt input.txt output.enc "yourpassword"
 
-**Decrypt a file:**
-```bash
-decrypt_file output.enc decrypted.txt "yourpassword"
+# Decrypt
+dechaos_decrypt output.enc decrypted.txt "yourpassword"
 ```
-
-The CLI tools process files in 1 MiB chunks, so memory usage stays constant
-regardless of file size. Decryption writes to a temporary file and only
-renames it into place **after** the auth tag verifies — unauthenticated data
-is never exposed.
 
 ### Library Usage — Single-shot
 
 ```c
 #include <vichaos.h>
 
-/* Encrypt */
 uint8_t *enc = NULL; size_t enc_len = 0;
-vichaos_result_t res = vichaos_encrypt(data, data_len, "password", &enc, &enc_len);
-if (res == VICHAOS_OK) { /* use enc */ vichaos_free(enc); }
+vichaos_result_t r = vichaos_encrypt(data, data_len,
+                                     "password", 8, NULL,
+                                     &enc, &enc_len);
+if (r == VICHAOS_OK) { /* use enc */ vichaos_free(enc); }
 
-/* Decrypt */
 uint8_t *dec = NULL; size_t dec_len = 0;
-res = vichaos_decrypt(enc, enc_len, "password", &dec, &dec_len);
-if (res == VICHAOS_OK) { /* use dec */ vichaos_free(dec); }
+r = vichaos_decrypt(enc, enc_len, "password", 8, NULL, &dec, &dec_len);
+if (r == VICHAOS_OK) { /* use dec */ vichaos_free(dec); }
 ```
-
-### Library Usage — Custom KDF iterations
-
-```c
-vichaos_options_t opts;
-vichaos_options_init(&opts);
-opts.kdf_iter = 1000000;  /* must be within [100000, 10000000] */
-
-vichaos_encrypt_with_options(data, data_len, "password", &opts, &enc, &enc_len);
-vichaos_decrypt_with_options(enc, enc_len, "password", &opts, &dec, &dec_len);
-```
-
-> **Note:** the KDF iteration count is **not** embedded in the payload. If you
-> encrypt with a non-default `kdf_iter`, you must pass the same value when
-> decrypting.
 
 ### Library Usage — Streaming (large files)
 
 ```c
 uint8_t header[VICHAOS_HEADER_OVERHEAD]; size_t header_len = 0;
-vichaos_stream_t *s = vichaos_stream_encrypt_init("password", NULL,
+vichaos_stream_t *s = vichaos_stream_encrypt_init("password", 8, NULL,
                                                   header, &header_len);
-fwrite(header, 1, header_len, out);          /* persist header first */
+fwrite(header, 1, header_len, out);
 
 uint8_t in_buf[VICHAOS_STREAM_CHUNK], out_buf[VICHAOS_STREAM_CHUNK + 16];
 size_t n;
@@ -123,54 +99,43 @@ while ((n = fread(in_buf, 1, sizeof(in_buf), in)) > 0) {
 }
 uint8_t tag[VICHAOS_TAG_SIZE]; size_t tag_len = 0;
 vichaos_stream_encrypt_final(s, tag, &tag_len);
-fwrite(tag, 1, tag_len, out);                /* persist trailing tag */
+fwrite(tag, 1, tag_len, out);
 ```
-
-For decryption, feed the header to `vichaos_stream_decrypt_init`, stream the
-ciphertext with `vichaos_stream_decrypt_update`, then verify the trailing tag
-with `vichaos_stream_decrypt_final`. **Discard any plaintext already written
-if final returns anything other than `VICHAOS_OK`.**
 
 ## Building from Source
 
 ```bash
-# Build shared + static libraries
-make
+# Default build (shared + static + tests + CLI)
+cmake -B build
+cmake --build build
 
-# Local performance build (uses native CPU features + LTO)
-make OPTFLAGS="-O3 -march=native -flto"
+# Release with sanitizers
+cmake -B build -DVICHAOS_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 
-# Install
-sudo make install
+# Coverage build
+cmake -B build -DVICHAOS_ENABLE_COVERAGE=ON
+cmake --build build
 ```
 
 ## Testing
 
 ```bash
-# Unit tests (single-shot, streaming, cross-compat, negative cases)
-make test
+# Run all tests
+ctest --test-dir build --output-on-failure
 
-# CLI integration tests (round-trip, wrong password, tamper detection)
-make -C example test
+# Run specific test
+./build/test_cipher
 ```
-
-## Examples
-
-See the `example/` directory for:
-- `encrypt_file.c` — streaming file encryption utility
-- `decrypt_file.c` — streaming file decryption utility (authenticated)
 
 ## Security Notes
 
-- **Always use strong passwords** (minimum 12 characters).
-- **Never store passwords** with encrypted files.
-- The KDF iteration count defaults to 600,000 (OWASP 2023 recommendation).
-  Increase on fast hardware; never go below 100,000.
-- This library relies on OpenSSL for all cryptographic primitives. Keep
-  OpenSSL patched and up to date.
-- The library does **not** implement side-channel hardened primitives beyond
-  what OpenSSL provides. For HSMs/smartcards, use dedicated tooling.
-- Always securely erase plaintext and secrets in your own application code.
+- Always use strong passwords (minimum 12 characters).
+- Never store passwords with encrypted files.
+- Default KDF iterations: 600,000 (OWASP 2023). Increase on fast hardware.
+- All secrets are wiped with `vichaos_secure_zeroize()`.
+- Constant-time memory comparison prevents timing attacks.
+- Streaming decryption releases plaintext before final auth verification — discard on failure.
 
 ## License
 
@@ -178,4 +143,4 @@ MIT License — See [LICENSE](LICENSE) file for details.
 
 ---
 
-*ViChaos v2 — Authenticated encryption, built on OpenSSL.*
+*ViChaos v3 — Authenticated encryption, built on OpenSSL.*
