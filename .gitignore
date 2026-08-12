@@ -88,6 +88,11 @@ debug.log
 core
 dump.*
 *.core
+# The generic `core` rule above also matches the source directory src/core/,
+# which the CMake build depends on (memory.c, cipher.c, kdf.c, auth.c).
+# Re-include it so those sources stay tracked.
+!src/core/
+!src/core/*
 
 # Package manager
 conan.lock

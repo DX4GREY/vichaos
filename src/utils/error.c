@@ -46,7 +46,7 @@ static void log_write(const char *prefix, const char *file, int line, const char
     vsnprintf(buf + n, sizeof(buf) - (size_t)n, fmt, ap);
     size_t len = strlen(buf);
     buf[len++] = '\n';
-    write(STDERR_FILENO, buf, len);
+    (void)write(STDERR_FILENO, buf, len);
 }
 
 void vichaos_log_internal(vichaos_log_level_t level,
