@@ -7,6 +7,7 @@
 // -----------------------------------------------------------------------------
 
 #include "vichaos.h"
+#include "vichaos_internal.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
@@ -17,20 +18,20 @@
 /* Public: encryption                                                         */
 /* ------------------------------------------------------------------------- */
 
-vichaos_result_t vichaos_encrypt_with_options(
-        const uint8_t *data,
-        size_t data_len,
-        const char *password,
-        const vichaos_options_t *options,
-        uint8_t **output,
-        size_t *output_len) {
+vichaos_result_t vichaos_encrypt(const uint8_t *data,
+                                 size_t data_len,
+                                 const char *password,
+                                 size_t password_len,
+                                 const vichaos_options_t *options,
+                                 uint8_t **output,
+                                 size_t *output_len) {
 
-    vichaos_result_t result = VICHAOS_OK;
+    vichaos_result_t result = VICHAOS_SUCCESS;
     vichaos_options_t defaults;
 
     if (output == NULL || output_len == NULL || password == NULL ||
         (data == NULL && data_len > 0)) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_NULL_PTR;
     }
 
     *output = NULL;
@@ -47,20 +48,20 @@ vichaos_result_t vichaos_encrypt_with_options(
 
     /* Guard against size_t overflow in output length computation. */
     if (data_len > (size_t)-1 - VICHAOS_OVERHEAD) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
     const size_t out_len = data_len + VICHAOS_OVERHEAD;
 
     uint8_t *out = malloc(out_len);
     if (out == NULL) {
-        return VICHAOS_MEMORY_ERROR;
+        return VICHAOS_ERR_MEMORY_ALLOC;
     }
 
     /* ---- Assemble header: magic + version ---- */
     uint8_t *ptr = out;
     memcpy(ptr, VICHAOS_FORMAT_MAGIC, VICHAOS_FORMAT_MAGIC_LEN);
     ptr += VICHAOS_FORMAT_MAGIC_LEN;
-    *ptr++ = VICHAOS_VERSION;
+    *ptr++ = VICHAOS_PAYLOAD_VERSION;
     const uint8_t *salt = ptr;
     void *salt_dst = ptr;
     ptr += VICHAOS_SALT_SIZE;
@@ -73,14 +74,14 @@ vichaos_result_t vichaos_encrypt_with_options(
     /* ---- Random salt + IV ---- */
     if (RAND_bytes(salt_dst, VICHAOS_SALT_SIZE) != 1 ||
         RAND_bytes(iv_dst, VICHAOS_IV_SIZE) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto fail;
     }
 
     /* ---- Derive key ---- */
     uint8_t key[VICHAOS_KEY_SIZE];
-    result = derive_key(password, salt, options->kdf_iter, key);
-    if (result != VICHAOS_OK) {
+    result = derive_key(password, password_len, salt, options->kdf_iter, key);
+    if (result != VICHAOS_SUCCESS) {
         goto fail;
     }
 
@@ -88,7 +89,7 @@ vichaos_result_t vichaos_encrypt_with_options(
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         OPENSSL_cleanse(key, sizeof(key));
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto fail;
     }
 
@@ -99,7 +100,7 @@ vichaos_result_t vichaos_encrypt_with_options(
      * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
         EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup_ctx;
     }
 
@@ -107,52 +108,41 @@ vichaos_result_t vichaos_encrypt_with_options(
     if (EVP_EncryptUpdate(ctx, NULL, &len,
                           (const unsigned char *)out,
                           VICHAOS_HEADER_OVERHEAD) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup_ctx;
     }
 
     /* Encrypt data (GCM updates do not expand size). */
     if (data_len > 0 &&
         EVP_EncryptUpdate(ctx, ciphertext, &len, data, (int)data_len) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup_ctx;
     }
 
     if (EVP_EncryptFinal_ex(ctx, ciphertext + len, &final_len) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup_ctx;
     }
 
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, VICHAOS_TAG_SIZE,
                             tag) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup_ctx;
     }
 
 cleanup_ctx:
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (result == VICHAOS_OK) {
+    if (result == VICHAOS_SUCCESS) {
         *output = out;
         *output_len = out_len;
-        return VICHAOS_OK;
+        return VICHAOS_SUCCESS;
     }
 
 fail:
     OPENSSL_cleanse(out, out_len);
     free(out);
     return result;
-}
-
-/* ------------------------------------------------------------------------- */
-/* Public: convenience wrappers                                              */
-/* ------------------------------------------------------------------------- */
-
-vichaos_result_t vichaos_encrypt(const uint8_t *data, size_t data_len,
-                                 const char *password,
-                                 uint8_t **output, size_t *output_len) {
-    return vichaos_encrypt_with_options(data, data_len, password, NULL,
-                                        output, output_len);
 }
 
 // -----------------------------------------------------------------------------

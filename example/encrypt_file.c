@@ -39,7 +39,8 @@ int main(int argc, char **argv) {
     /* ---- Init stream; write fixed 37-byte header ---- */
     uint8_t header[VICHAOS_HEADER_OVERHEAD];
     size_t header_len = 0;
-    vichaos_stream_t *s = vichaos_stream_encrypt_init(argv[3], NULL,
+    vichaos_stream_t *s = vichaos_stream_encrypt_init(argv[3],
+                                                      strlen(argv[3]), NULL,
                                                       header, &header_len);
     if (s == NULL) {
         fclose(in);
@@ -58,13 +59,13 @@ int main(int argc, char **argv) {
     uint8_t in_buf[VICHAOS_STREAM_CHUNK];
     uint8_t out_buf[VICHAOS_STREAM_CHUNK + 16]; /* EVP block margin */
     size_t n;
-    vichaos_result_t res = VICHAOS_OK;
+    vichaos_result_t res = VICHAOS_SUCCESS;
 
     while ((n = fread(in_buf, 1, sizeof(in_buf), in)) > 0) {
         size_t out_len = 0;
         res = vichaos_stream_encrypt_update(s, in_buf, n, out_buf, &out_len);
-        if (res != VICHAOS_OK) {
-            fprintf(stderr, "Encrypt failed: %s\n", vichaos_error_string(res));
+        if (res != VICHAOS_SUCCESS) {
+            fprintf(stderr, "Encrypt failed: %s\n", vichaos_strerror(res));
             fclose(in);
             fclose(out);
             return 1;
@@ -87,8 +88,8 @@ int main(int argc, char **argv) {
     uint8_t tag[VICHAOS_TAG_SIZE];
     size_t tag_len = 0;
     res = vichaos_stream_encrypt_final(s, tag, &tag_len);
-    if (res != VICHAOS_OK) {
-        fprintf(stderr, "Finalize failed: %s\n", vichaos_error_string(res));
+    if (res != VICHAOS_SUCCESS) {
+        fprintf(stderr, "Finalize failed: %s\n", vichaos_strerror(res));
         fclose(in);
         fclose(out);
         return 1;

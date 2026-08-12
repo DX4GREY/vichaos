@@ -73,8 +73,9 @@ int main(int argc, char **argv) {
         return fail("file too short: missing header");
     }
 
-    vichaos_stream_t *s = vichaos_stream_decrypt_init(argv[3], header,
-                                                      sizeof(header), NULL);
+    vichaos_stream_t *s = vichaos_stream_decrypt_init(argv[3], strlen(argv[3]),
+                                                      header, sizeof(header),
+                                                      NULL);
     if (s == NULL) {
         fclose(in);
         fclose(out);
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
 
     uint8_t in_buf[VICHAOS_STREAM_CHUNK];
     uint8_t out_buf[VICHAOS_STREAM_CHUNK + 16]; /* EVP block margin */
-    vichaos_result_t res = VICHAOS_OK;
+    vichaos_result_t res = VICHAOS_SUCCESS;
 
     while (cipher_len > 0) {
         size_t want = (cipher_len > (long)sizeof(in_buf))
@@ -105,8 +106,8 @@ int main(int argc, char **argv) {
 
         size_t out_len = 0;
         res = vichaos_stream_decrypt_update(s, in_buf, n, out_buf, &out_len);
-        if (res != VICHAOS_OK) {
-            fprintf(stderr, "Decrypt failed: %s\n", vichaos_error_string(res));
+        if (res != VICHAOS_SUCCESS) {
+            fprintf(stderr, "Decrypt failed: %s\n", vichaos_strerror(res));
             fclose(in);
             fclose(out);
             remove(tmp_path);
@@ -133,8 +134,8 @@ int main(int argc, char **argv) {
 
     /* ---- Finalize: verify auth tag ---- */
     res = vichaos_stream_decrypt_final(s, tag, sizeof(tag));
-    if (res != VICHAOS_OK) {
-        fprintf(stderr, "Authentication failed: %s\n", vichaos_error_string(res));
+    if (res != VICHAOS_SUCCESS) {
+        fprintf(stderr, "Authentication failed: %s\n", vichaos_strerror(res));
         fclose(in);
         fclose(out);
         remove(tmp_path);

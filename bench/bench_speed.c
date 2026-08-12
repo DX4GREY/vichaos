@@ -93,19 +93,19 @@ static bench_result_t bench_single_shot(const uint8_t *data, size_t len,
     size_t enc_len = 0, dec_len = 0;
 
     double t0 = now_seconds();
-    vichaos_result_t er = vichaos_encrypt_with_options(data, len, password,
-                                                       opts, &enc, &enc_len);
+    vichaos_result_t er = vichaos_encrypt(data, len, password,
+                                                       strlen(password), opts, &enc, &enc_len);
     double t1 = now_seconds();
-    if (er != VICHAOS_OK) {
-        fprintf(stderr, "  encrypt failed: %s\n", vichaos_error_string(er));
+    if (er != VICHAOS_SUCCESS) {
+        fprintf(stderr, "  encrypt failed: %s\n", vichaos_strerror(er));
         goto out;
     }
 
-    vichaos_result_t dr = vichaos_decrypt_with_options(enc, enc_len, password,
-                                                       opts, &dec, &dec_len);
+    vichaos_result_t dr = vichaos_decrypt(enc, enc_len, password,
+                                                       strlen(password), opts, &dec, &dec_len);
     double t2 = now_seconds();
-    if (dr != VICHAOS_OK) {
-        fprintf(stderr, "  decrypt failed: %s\n", vichaos_error_string(dr));
+    if (dr != VICHAOS_SUCCESS) {
+        fprintf(stderr, "  decrypt failed: %s\n", vichaos_strerror(dr));
         goto out;
     }
 
@@ -137,7 +137,8 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
     size_t header_len = 0;
     double t0 = now_seconds();
 
-    vichaos_stream_t *es = vichaos_stream_encrypt_init(password, opts,
+    vichaos_stream_t *es = vichaos_stream_encrypt_init(password,
+                                                       strlen(password), opts,
                                                        header, &header_len);
     if (!es) {
         fprintf(stderr, "  stream encrypt init failed\n");
@@ -155,7 +156,7 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
     enc_len = header_len;
 
     size_t off = 0;
-    vichaos_result_t res = VICHAOS_OK;
+    vichaos_result_t res = VICHAOS_SUCCESS;
     while (off < len) {
         size_t chunk = len - off;
         if (chunk > VICHAOS_STREAM_CHUNK)
@@ -163,9 +164,9 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
         size_t out_len = 0;
         res = vichaos_stream_encrypt_update(es, data + off, chunk,
                                             enc + enc_len, &out_len);
-        if (res != VICHAOS_OK) {
+        if (res != VICHAOS_SUCCESS) {
             fprintf(stderr, "  stream encrypt update failed: %s\n",
-                    vichaos_error_string(res));
+                    vichaos_strerror(res));
             vichaos_stream_encrypt_final(es, NULL, NULL);
             free(enc);
             return r;
@@ -177,9 +178,9 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
     uint8_t tag[VICHAOS_TAG_SIZE];
     size_t tag_len = 0;
     res = vichaos_stream_encrypt_final(es, tag, &tag_len);
-    if (res != VICHAOS_OK) {
+    if (res != VICHAOS_SUCCESS) {
         fprintf(stderr, "  stream encrypt final failed: %s\n",
-                vichaos_error_string(res));
+                vichaos_strerror(res));
         free(enc);
         return r;
     }
@@ -195,7 +196,8 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
         return r;
     }
 
-    vichaos_stream_t *ds = vichaos_stream_decrypt_init(password, enc,
+    vichaos_stream_t *ds = vichaos_stream_decrypt_init(password,
+                                                       strlen(password), enc,
                                                        header_len, opts);
     if (!ds) {
         fprintf(stderr, "  stream decrypt init failed\n");
@@ -214,9 +216,9 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
         size_t out_len = 0;
         res = vichaos_stream_decrypt_update(ds, enc + header_len + off, chunk,
                                             dec + dec_len, &out_len);
-        if (res != VICHAOS_OK) {
+        if (res != VICHAOS_SUCCESS) {
             fprintf(stderr, "  stream decrypt update failed: %s\n",
-                    vichaos_error_string(res));
+                    vichaos_strerror(res));
             vichaos_stream_decrypt_final(ds, NULL, 0);
             free(enc);
             free(dec);
@@ -227,9 +229,9 @@ static bench_result_t bench_stream(const uint8_t *data, size_t len,
     }
 
     res = vichaos_stream_decrypt_final(ds, enc + enc_len - tag_len, tag_len);
-    if (res != VICHAOS_OK) {
+    if (res != VICHAOS_SUCCESS) {
         fprintf(stderr, "  stream decrypt final failed: %s\n",
-                vichaos_error_string(res));
+                vichaos_strerror(res));
         free(enc);
         free(dec);
         return r;

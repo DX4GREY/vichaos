@@ -86,11 +86,11 @@ uint8_t *enc = NULL; size_t enc_len = 0;
 vichaos_result_t r = vichaos_encrypt(data, data_len,
                                      "password", 8, NULL,
                                      &enc, &enc_len);
-if (r == VICHAOS_OK) { /* use enc */ vichaos_free(enc); }
+if (r == VICHAOS_SUCCESS) { /* use enc */ vichaos_free(enc); }
 
 uint8_t *dec = NULL; size_t dec_len = 0;
 r = vichaos_decrypt(enc, enc_len, "password", 8, NULL, &dec, &dec_len);
-if (r == VICHAOS_OK) { /* use dec */ vichaos_free(dec); }
+if (r == VICHAOS_SUCCESS) { /* use dec */ vichaos_free(dec); }
 ```
 
 ### Library Usage — Streaming (large files)

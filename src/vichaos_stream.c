@@ -7,6 +7,7 @@
 // -----------------------------------------------------------------------------
 
 #include "vichaos.h"
+#include "vichaos_internal.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
@@ -37,7 +38,7 @@ static vichaos_stream_t *stream_alloc(EVP_CIPHER_CTX *ctx,
     memcpy(s->key, key, VICHAOS_KEY_SIZE);
     s->is_encrypt = is_encrypt;
     s->finalized = 0;
-    s->error = VICHAOS_OK;
+    s->error = VICHAOS_SUCCESS;
     return s;
 }
 
@@ -50,6 +51,7 @@ static void stream_free(vichaos_stream_t *s) {
 
 vichaos_stream_t *vichaos_stream_encrypt_init(
         const char *password,
+        size_t password_len,
         const vichaos_options_t *options,
         uint8_t *header_out,
         size_t *header_out_len) {
@@ -70,7 +72,7 @@ vichaos_stream_t *vichaos_stream_encrypt_init(
 
     /* Assemble header: magic + version + salt + iv */
     memcpy(header_out, VICHAOS_FORMAT_MAGIC, VICHAOS_FORMAT_MAGIC_LEN);
-    header_out[VICHAOS_FORMAT_MAGIC_LEN] = VICHAOS_VERSION;
+    header_out[VICHAOS_FORMAT_MAGIC_LEN] = VICHAOS_PAYLOAD_VERSION;
     uint8_t *salt = header_out + VICHAOS_FORMAT_MAGIC_LEN + 1;
     uint8_t *iv = salt + VICHAOS_SALT_SIZE;
 
@@ -81,7 +83,7 @@ vichaos_stream_t *vichaos_stream_encrypt_init(
     *header_out_len = VICHAOS_HEADER_OVERHEAD;
 
     uint8_t key[VICHAOS_KEY_SIZE];
-    if (derive_key(password, salt, options->kdf_iter, key) != VICHAOS_OK) {
+    if (derive_key(password, password_len, salt, options->kdf_iter, key) != VICHAOS_SUCCESS) {
         return NULL;
     }
 
@@ -117,21 +119,21 @@ vichaos_result_t vichaos_stream_encrypt_update(
     if (stream == NULL || out_len == NULL ||
         (in == NULL && in_len > 0) || (out == NULL && in_len > 0) ||
         stream->is_encrypt == 0 || stream->finalized) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
 
-    if (stream->error != VICHAOS_OK) {
+    if (stream->error != VICHAOS_SUCCESS) {
         return stream->error;
     }
 
     int len = 0;
     if (in_len > 0 &&
         EVP_EncryptUpdate(stream->ctx, out, &len, in, (int)in_len) != 1) {
-        stream->error = VICHAOS_CRYPTO_ERROR;
+        stream->error = VICHAOS_ERR_OPENSSL;
         return stream->error;
     }
     *out_len = (size_t)len;
-    return VICHAOS_OK;
+    return VICHAOS_SUCCESS;
 }
 
 vichaos_result_t vichaos_stream_encrypt_final(
@@ -141,17 +143,17 @@ vichaos_result_t vichaos_stream_encrypt_final(
 
     if (stream == NULL || tag_out == NULL || tag_out_len == NULL ||
         stream->is_encrypt == 0 || stream->finalized) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
 
     vichaos_result_t result = stream->error;
-    if (result == VICHAOS_OK) {
+    if (result == VICHAOS_SUCCESS) {
         int len = 0;
         /* GCM final produces no trailing ciphertext */
         if (EVP_EncryptFinal_ex(stream->ctx, tag_out, &len) != 1 ||
             EVP_CIPHER_CTX_ctrl(stream->ctx, EVP_CTRL_GCM_GET_TAG,
                                 VICHAOS_TAG_SIZE, tag_out) != 1) {
-            result = VICHAOS_CRYPTO_ERROR;
+            result = VICHAOS_ERR_OPENSSL;
         } else {
             *tag_out_len = VICHAOS_TAG_SIZE;
         }
@@ -164,6 +166,7 @@ vichaos_result_t vichaos_stream_encrypt_final(
 
 vichaos_stream_t *vichaos_stream_decrypt_init(
         const char *password,
+        size_t password_len,
         const uint8_t *header,
         size_t header_len,
         const vichaos_options_t *options) {
@@ -177,7 +180,7 @@ vichaos_stream_t *vichaos_stream_decrypt_init(
     if (memcmp(header, VICHAOS_FORMAT_MAGIC, VICHAOS_FORMAT_MAGIC_LEN) != 0) {
         return NULL;
     }
-    if (header[VICHAOS_FORMAT_MAGIC_LEN] != VICHAOS_VERSION) {
+    if (header[VICHAOS_FORMAT_MAGIC_LEN] != VICHAOS_PAYLOAD_VERSION) {
         return NULL;
     }
 
@@ -194,7 +197,7 @@ vichaos_stream_t *vichaos_stream_decrypt_init(
     const uint8_t *iv = salt + VICHAOS_SALT_SIZE;
 
     uint8_t key[VICHAOS_KEY_SIZE];
-    if (derive_key(password, salt, options->kdf_iter, key) != VICHAOS_OK) {
+    if (derive_key(password, password_len, salt, options->kdf_iter, key) != VICHAOS_SUCCESS) {
         return NULL;
     }
 
@@ -229,21 +232,21 @@ vichaos_result_t vichaos_stream_decrypt_update(
     if (stream == NULL || out_len == NULL ||
         (in == NULL && in_len > 0) || (out == NULL && in_len > 0) ||
         stream->is_encrypt != 0 || stream->finalized) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
 
-    if (stream->error != VICHAOS_OK) {
+    if (stream->error != VICHAOS_SUCCESS) {
         return stream->error;
     }
 
     int len = 0;
     if (in_len > 0 &&
         EVP_DecryptUpdate(stream->ctx, out, &len, in, (int)in_len) != 1) {
-        stream->error = VICHAOS_CRYPTO_ERROR;
+        stream->error = VICHAOS_ERR_OPENSSL;
         return stream->error;
     }
     *out_len = (size_t)len;
-    return VICHAOS_OK;
+    return VICHAOS_SUCCESS;
 }
 
 vichaos_result_t vichaos_stream_decrypt_final(
@@ -253,19 +256,19 @@ vichaos_result_t vichaos_stream_decrypt_final(
 
     if (stream == NULL || tag == NULL || tag_len != VICHAOS_TAG_SIZE ||
         stream->is_encrypt != 0 || stream->finalized) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
 
     vichaos_result_t result = stream->error;
-    if (result == VICHAOS_OK) {
+    if (result == VICHAOS_SUCCESS) {
         if (EVP_CIPHER_CTX_ctrl(stream->ctx, EVP_CTRL_GCM_SET_TAG,
                                 VICHAOS_TAG_SIZE, (void *)tag) != 1) {
-            result = VICHAOS_CRYPTO_ERROR;
+            result = VICHAOS_ERR_OPENSSL;
         } else {
             uint8_t scratch[32];
             int len = 0;
             if (EVP_DecryptFinal_ex(stream->ctx, scratch, &len) <= 0) {
-                result = VICHAOS_HMAC_MISMATCH;
+                result = VICHAOS_ERR_AUTH_FAIL;
             }
             OPENSSL_cleanse(scratch, sizeof(scratch));
         }

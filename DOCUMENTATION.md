@@ -267,7 +267,7 @@ The header and tag are fixed-size; the ciphertext length is `file_size - 37 - 16
 
 5. **Streaming Decryption Warning**
    - Plaintext chunks are released **before** the final auth tag is verified.
-   - Always write to a temporary file and rename only after `vichaos_stream_decrypt_final()` returns `VICHAOS_OK`.
+   - Always write to a temporary file and rename only after `vichaos_stream_decrypt_final()` returns `VICHAOS_SUCCESS`.
 
 6. **Side-Channel Resistance**
    - The library does not implement additional side-channel hardening beyond what OpenSSL provides.
@@ -352,11 +352,11 @@ make test
 - **Memory:** Return exactly one allocation per call. Free with `vichaos_free()`.
 - **Secrets:** Wipe with `OPENSSL_cleanse()` before freeing.
 - **Headers:** Include guards with `VICHAOS_H`.
-- **Strings:** Use `vichaos_error_string()` for user-facing errors.
+- **Strings:** Use `vichaos_strerror()` for user-facing errors.
 
 ### Releasing
 
-1. Bump `VICHAOS_VERSION` in `include/vichaos.h` if the payload format changes.
+1. Bump `VICHAOS_PAYLOAD_VERSION` in `include/vichaos.h` if the payload format changes.
 2. Update `SONAME` in `Makefile` if the ABI changes.
 3. Tag the release: `git tag v2.x.x && git push --tags`.
 4. Publish the built artifacts (`libvichaos.so`, `libvichaos.a`, headers).

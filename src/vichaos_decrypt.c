@@ -7,6 +7,7 @@
 // -----------------------------------------------------------------------------
 
 #include "vichaos.h"
+#include "vichaos_internal.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
@@ -17,20 +18,20 @@
 /* Public: decryption                                                         */
 /* ------------------------------------------------------------------------- */
 
-vichaos_result_t vichaos_decrypt_with_options(
-        const uint8_t *data,
-        size_t data_len,
-        const char *password,
-        const vichaos_options_t *options,
-        uint8_t **output,
-        size_t *output_len) {
+vichaos_result_t vichaos_decrypt(const uint8_t *data,
+                                 size_t data_len,
+                                 const char *password,
+                                 size_t password_len,
+                                 const vichaos_options_t *options,
+                                 uint8_t **output,
+                                 size_t *output_len) {
 
-    vichaos_result_t result = VICHAOS_OK;
+    vichaos_result_t result = VICHAOS_SUCCESS;
     vichaos_options_t defaults;
 
     if (output == NULL || output_len == NULL || password == NULL ||
         (data == NULL && data_len > 0) || data == NULL) {
-        return VICHAOS_INVALID_ARGUMENT;
+        return VICHAOS_ERR_NULL_PTR;
     }
 
     *output = NULL;
@@ -47,15 +48,15 @@ vichaos_result_t vichaos_decrypt_with_options(
 
     /* Minimal framing check. */
     if (data_len < VICHAOS_OVERHEAD) {
-        return VICHAOS_INVALID_HEADER;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
 
     /* ---- Verify magic + version ---- */
     if (memcmp(data, VICHAOS_FORMAT_MAGIC, VICHAOS_FORMAT_MAGIC_LEN) != 0) {
-        return VICHAOS_INVALID_HEADER;
+        return VICHAOS_ERR_INVALID_PARAM;
     }
-    if (data[VICHAOS_FORMAT_MAGIC_LEN] != VICHAOS_VERSION) {
-        return VICHAOS_UNSUPPORTED_VERSION;
+    if (data[VICHAOS_FORMAT_MAGIC_LEN] != VICHAOS_PAYLOAD_VERSION) {
+        return VICHAOS_ERR_VERSION_MISMATCH;
     }
 
     const uint8_t *salt = data + VICHAOS_FORMAT_MAGIC_LEN + 1;
@@ -66,8 +67,8 @@ vichaos_result_t vichaos_decrypt_with_options(
 
     /* ---- Derive key ---- */
     uint8_t key[VICHAOS_KEY_SIZE];
-    result = derive_key(password, salt, options->kdf_iter, key);
-    if (result != VICHAOS_OK) {
+    result = derive_key(password, password_len, salt, options->kdf_iter, key);
+    if (result != VICHAOS_SUCCESS) {
         return result;
     }
 
@@ -77,7 +78,7 @@ vichaos_result_t vichaos_decrypt_with_options(
         plaintext = malloc(plaintext_len);
         if (plaintext == NULL) {
             OPENSSL_cleanse(key, sizeof(key));
-            return VICHAOS_MEMORY_ERROR;
+            return VICHAOS_ERR_MEMORY_ALLOC;
         }
     }
     /* EVP_DecryptFinal_ex requires a non-NULL output buffer even for
@@ -91,40 +92,40 @@ vichaos_result_t vichaos_decrypt_with_options(
     if (ctx == NULL) {
         OPENSSL_cleanse(key, sizeof(key));
         free(plaintext);
-        return VICHAOS_CRYPTO_ERROR;
+        return VICHAOS_ERR_OPENSSL;
     }
 
     /* VICHAOS_IV_SIZE (12) is the GCM default IV length, so the
      * EVP_CTRL_GCM_SET_IVLEN call is omitted to save a ctrl round-trip. */
     if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
         EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup;
     }
 
     /* Authenticate magic + version (AAD). */
     if (EVP_DecryptUpdate(ctx, NULL, &len, data,
                           VICHAOS_HEADER_OVERHEAD) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup;
     }
 
     if (plaintext_len > 0 &&
         EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext,
                           (int)plaintext_len) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup;
     }
 
     /* Set expected tag before final. */
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, VICHAOS_TAG_SIZE,
                             (void *)tag) != 1) {
-        result = VICHAOS_CRYPTO_ERROR;
+        result = VICHAOS_ERR_OPENSSL;
         goto cleanup;
     }
 
     if (EVP_DecryptFinal_ex(ctx, final_out, &final_len) <= 0) {
-        result = VICHAOS_HMAC_MISMATCH;
+        result = VICHAOS_ERR_AUTH_FAIL;
         goto cleanup;
     }
 
@@ -141,17 +142,6 @@ cleanup:
         free(plaintext);
     }
     return result;
-}
-
-/* ------------------------------------------------------------------------- */
-/* Public: convenience wrappers                                              */
-/* ------------------------------------------------------------------------- */
-
-vichaos_result_t vichaos_decrypt(const uint8_t *data, size_t data_len,
-                                 const char *password,
-                                 uint8_t **output, size_t *output_len) {
-    return vichaos_decrypt_with_options(data, data_len, password, NULL,
-                                        output, output_len);
 }
 
 // -----------------------------------------------------------------------------
