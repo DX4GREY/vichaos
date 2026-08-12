@@ -34,8 +34,6 @@ add_compile_options(
     $<$<C_COMPILER_ID:GNU,Clang>:-Wformat-security>
     $<$<C_COMPILER_ID:GNU,Clang>:-fstack-protector-strong>
     $<$<C_COMPILER_ID:GNU,Clang>:-D_FORTIFY_SOURCE=2>
-    $<$<C_COMPILER_ID:GNU,Clang>:-fPIE>
-    $<$<C_COMPILER_ID:GNU,Clang>:-pie>
     $<$<C_COMPILER_ID:GNU,Clang>:-Wconversion>
     $<$<C_COMPILER_ID:GNU,Clang>:-Wsign-conversion>
 )
