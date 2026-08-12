@@ -108,10 +108,14 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(VICHAOS_BUILD_CLI)
-    add_executable(vichaos_encrypt src/cli/encrypt.c)
+    add_executable(vichaos src/cli/vichaos_cli.c src/cli/encrypt.c src/cli/decrypt.c src/cli/cli_utils.c)
+    target_compile_definitions(vichaos PRIVATE VICHAOS_UNIFIED_CLI=1)
+    target_link_libraries(vichaos PRIVATE vichaos_shared)
+
+    add_executable(vichaos_encrypt src/cli/encrypt.c src/cli/cli_utils.c)
     target_link_libraries(vichaos_encrypt PRIVATE vichaos_shared)
 
-    add_executable(vichaos_decrypt src/cli/decrypt.c)
+    add_executable(vichaos_decrypt src/cli/decrypt.c src/cli/cli_utils.c)
     target_link_libraries(vichaos_decrypt PRIVATE vichaos_shared)
 endif()
 
@@ -151,6 +155,10 @@ endif()
 # ---------------------------------------------------------------------------
 
 include(GNUInstallDirs)
+
+if(VICHAOS_BUILD_CLI)
+    install(TARGETS vichaos vichaos_encrypt vichaos_decrypt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 install(TARGETS vichaos_shared vichaos_static
     EXPORT ViChaosTargets

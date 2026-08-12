@@ -59,11 +59,22 @@ sudo apt-get install build-essential libssl-dev cmake
 ### Command Line Tools
 
 ```bash
-# Encrypt
-vichaos_encrypt input.txt output.enc "yourpassword"
+# Encrypt file securely (interactive password prompt)
+vichaos enc -i input.txt -o output.enc --progress
 
-# Decrypt
-dechaos_decrypt output.enc decrypted.txt "yourpassword"
+# Encrypt using keyfile or environment variable
+vichaos enc -i input.txt -o output.enc -k keyfile.txt
+VICHAOS_PASSPHRASE="mysecret" vichaos enc -i input.txt -o output.enc
+
+# Inspect file header & metadata (without decrypting)
+vichaos info output.enc
+
+# Decrypt file securely
+vichaos dec -i output.enc -o decrypted.txt --progress
+
+# Legacy positional syntax (backward compatible)
+vichaos_encrypt input.txt output.enc "yourpassword"
+vichaos_decrypt output.enc decrypted.txt "yourpassword"
 ```
 
 ### Library Usage — Single-shot
